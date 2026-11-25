@@ -143,6 +143,10 @@
   .set{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-top:1px solid var(--line);gap:10px}
   .set:first-of-type{border-top:0}
   .set input[type=time]{background:var(--card2);border:0;border-radius:10px;padding:8px 10px;color:var(--text)}
+  .snd{width:100%;border-top:0;font-size:16px}
+  .sw{width:50px;height:30px;border-radius:15px;background:#3a3a3e;position:relative;transition:background .2s;flex:none}
+  .sw i{position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .2s}
+  .sw.on{background:var(--ok)} .sw.on i{left:23px}
   .btn{display:block;width:100%;padding:14px;border-radius:16px;background:var(--card2);font-size:16px;margin-top:10px;text-align:center}
   .btn.white{background:var(--text);color:#000;font-weight:600}
   .btn.red{color:#ff453a}
@@ -469,6 +473,11 @@ function renderSettings(){
   $app.innerHTML = `
   <div class="top"><div class="datebox" style="text-align:left"><div class="lbl">Your data</div><div class="big">Settings</div></div></div>
   <div class="card">
+    <div class="sec"><h3>Sound</h3></div>
+    <button class="set snd" id="sndToggle"><span>Sound effects</span><span class="sw ${state.settings.sound===false?'':'on'}"><i></i></span></button>
+    <p class="note">On iPhone, sounds only play when the ring/silent switch is on ring.</p>
+  </div>
+  <div class="card">
     <div class="sec"><h3>Backup</h3></div>
     <p class="note">Your data lives only on this phone. Copy a backup now and then (paste it into Notes), so you never lose your streaks.</p>
     <button class="btn white" id="copyBk">Copy backup</button>
@@ -478,7 +487,39 @@ function renderSettings(){
   <div class="card">
     <button class="btn red" id="reset" style="margin-top:0">Erase all data</button>
   </div>
-  <p class="note" style="text-align:center">Routine · ${Object.keys(state.days).length} days logged</p>`;
+  <p class="note" style="text-align:center">Stats · ${Object.keys(state.days).length} ${Object.keys(state.days).length===1?'day':'days'} logged</p>`;
+}
+
+
+/* ---------- sound effects (synthesized, no audio files) ---------- */
+let AC = null;
+function ac(){
+  if (!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return null; } }
+  if (AC.state==='suspended') AC.resume();
+  return AC;
+}
+// one short note: frequency, start offset (s), length (s), waveform, volume, optional pitch slide
+function note(f, at, len, type='sine', vol=0.16, slideTo){
+  const c = ac(); if (!c) return;
+  const t = c.currentTime + at, o = c.createOscillator(), g = c.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t+len);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t+0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+len);
+  o.connect(g).connect(c.destination); o.start(t); o.stop(t+len+0.02);
+}
+const SFX = {
+  tick(){   note(1046,0,.07,'triangle',.18); note(1568,.055,.12,'triangle',.16); },           // bright double blip
+  untick(){ note(700,0,.09,'sine',.12,420); },                                                // soft drop
+  save(){   note(880,0,.06,'square',.06); note(1320,.05,.09,'square',.05); },                 // short UI confirm
+  workout(){ [523,659,784].forEach((f,i)=>note(f,i*.07,.16,'triangle',.17)); note(1568,.21,.28,'sine',.12); }, // rising arpeggio
+  level(){  [392,523,659,784,1046].forEach((f,i)=>note(f,i*.08,.22,'sawtooth',.07)); note(1046,.4,.5,'triangle',.15); }, // level up
+  allDone(){ [523,659,784].forEach((f,i)=>note(f,i*.09,.2,'triangle',.16)); [1046,1318,1568].forEach(f=>note(f,.3,.7,'sine',.09)); }, // mission passed chord
+};
+function play(name){
+  if (state.settings.sound===false) return;
+  try{ SFX[name](); }catch(e){}
 }
 
 /* ---------- actions ---------- */
@@ -504,8 +545,14 @@ document.addEventListener('click', e=>{
   if (el.dataset.editbody){ view.editBody = el.dataset.editbody==='1'; render(); return; }
   if (el.dataset.wk){ const d=day(k,true), ty=el.dataset.wk; const was=wkDone(d,ty);
     if (d.workout){ d.wk={...(d.wk||{}),[d.workout]:true}; delete d.workout; }
-    d.wk={...(d.wk||{}),[ty]:!was}; save(); render(); if(!was) toast(ty==='strength'?'💪 Strength done':'⚡ Cardio done'); return; }
-  if (el.dataset.habit){ const d=day(k,true); d.checks[el.dataset.habit]=!d.checks[el.dataset.habit]; save(); render(); return; }
+    d.wk={...(d.wk||{}),[ty]:!was}; save(); render();
+    if (was) { play('untick'); return; }
+    const tot = totalWk(ty,k);
+    if (tot%25===0 && tot<=100){ play('level'); toast(`${ty==='strength'?'💪 Strength':'⚡ Cardio'} level up! ${tot/25}/4`); }
+    else { play('workout'); toast(ty==='strength'?'💪 Strength done':'⚡ Cardio done'); }
+    return; }
+  if (el.dataset.habit){ const d=day(k,true); const on = !d.checks[el.dataset.habit]; d.checks[el.dataset.habit]=on; save(); render();
+    play(!on ? 'untick' : score(k).p>=1 ? 'allDone' : 'tick'); return; }
   if (el.id==='copyBk'){
     const txt = JSON.stringify(state);
     (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject())
@@ -513,6 +560,7 @@ document.addEventListener('click', e=>{
       .catch(()=>{ view.restoreOpen=true; render(); const ta=document.getElementById('restoreTxt'); ta.value=txt; ta.select(); toast('Select all & copy this text'); });
     return;
   }
+  if (el.id==='sndToggle'){ state.settings.sound = state.settings.sound===false; save(); render(); play('tick'); return; }
   if (el.id==='openRestore'){ view.restoreOpen=!view.restoreOpen; render(); return; }
   if (el.id==='doRestore'){
     try{
@@ -536,7 +584,7 @@ document.addEventListener('submit', e=>{
   const d = day(view.date,true);
   if (isNaN(v)) { if (d.weight!=null){ d.weight=null; save(); render(); toast('Weight removed'); } return; }
   if (v<20 || v>300) { toast('Enter your weight in kg'); return; }
-  d.weight = Math.round(v*10)/10; save(); render(); toast('Weight saved');
+  d.weight = Math.round(v*10)/10; save(); render(); play('save'); toast('Weight saved');
 });
 
 document.addEventListener('submit', e=>{
@@ -548,7 +596,7 @@ document.addEventListener('submit', e=>{
   if (!p.sex) return toast('Choose male or female');
   if (!p.age || p.age<12 || p.age>100) return toast('Enter your age');
   if (!p.height || p.height<120 || p.height>230) return toast('Enter your height in cm');
-  state.profile = p; view.editBody=false; save(); render(); toast('Body profile saved');
+  state.profile = p; view.editBody=false; save(); render(); play('save'); toast('Body profile saved');
 });
 
 // When the app comes back from the background on a new day, jump to today.

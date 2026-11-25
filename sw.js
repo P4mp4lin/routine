@@ -1,5 +1,5 @@
 // Lets the app open with no internet. Bump VERSION when you upload a new index.html.
-const VERSION = 'routine-v7';
+const VERSION = 'routine-v8';
 const FILES = ['./', './index.html', './manifest.json', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
